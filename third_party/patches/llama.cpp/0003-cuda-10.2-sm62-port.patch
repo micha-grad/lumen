@@ -1,0 +1,513 @@
+diff --git a/ggml/src/ggml-cuda/allreduce.cu b/ggml/src/ggml-cuda/allreduce.cu
+index 39b23be..1dc4d21 100644
+--- a/ggml/src/ggml-cuda/allreduce.cu
++++ b/ggml/src/ggml-cuda/allreduce.cu
+@@ -902,7 +902,9 @@ bool ggml_cuda_ar_allreduce(
+             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
+             const size_t chunk_dst_bytes  = chunk_elems * input_type_size;
+ 
+-            const auto [slot, token] = ggml_cuda_ar_acquire_slot(p);
++            const ggml_cuda_ar_slot_info slot_info = ggml_cuda_ar_acquire_slot(p); // lumen: no structured bindings in C++14
++            const int slot  = slot_info.slot;
++            const int token = slot_info.token;
+             const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
+ 
+             for (int i = 0; i < n; ++i) {
+diff --git a/ggml/src/ggml-cuda/binbcast.cu b/ggml/src/ggml-cuda/binbcast.cu
+index f7c3a73..6add1da 100644
+--- a/ggml/src/ggml-cuda/binbcast.cu
++++ b/ggml/src/ggml-cuda/binbcast.cu
+@@ -85,7 +85,9 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
+ 
+         float result = src0_row ? ggml_cuda_cast<float>(src0_row[size_t(i0)*s00]) : 0.0f;
+         if constexpr (sizeof...(src1_ptrs) > 0) {
+-            result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))));
++            // lumen: C++14 form of the comma fold, applies bin_op once per src1, left to right.
++            using expand_t = int[];
++            (void) expand_t{0, ((result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))), 0)...};
+         } else {
+             result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + size_t(i10)*s10]));
+         }
+@@ -157,7 +159,9 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
+     ggml_cuda_pdl_sync();
+     float result = src0_row ? ggml_cuda_cast<float>(src0_row[size_t(i0)*s00]) : 0.0f;
+     if constexpr (sizeof...(src1_ptrs) > 0) {
+-        result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))));
++        // lumen: C++14 form of the comma fold, applies bin_op once per src1, left to right.
++        using expand_t = int[];
++        (void) expand_t{0, ((result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))), 0)...};
+     } else {
+         result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + size_t(i10)*s10]));
+     }
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+index fea1cf9..66c087b 100644
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -589,11 +589,27 @@ enum class block_reduce_method {
+ template<block_reduce_method method_t, typename T>
+ struct block_reduce_policy;
+ 
++#if __cplusplus >= 201703L
+ template <typename T, typename... Ts>
+ inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+ 
+ template<typename...>
+ inline constexpr bool ggml_cuda_dependent_false_v = false;
++#else
++// lumen: C++14 equivalents (no fold expressions, no inline variables).
++template <typename T, typename... Ts>
++struct ggml_cuda_is_any : std::false_type {};
++
++template <typename T, typename U, typename... Ts>
++struct ggml_cuda_is_any<T, U, Ts...>
++    : std::integral_constant<bool, std::is_same<T, U>::value || ggml_cuda_is_any<T, Ts...>::value> {};
++
++template <typename T, typename... Ts>
++constexpr bool is_any = ggml_cuda_is_any<T, Ts...>::value;
++
++template<typename...>
++constexpr bool ggml_cuda_dependent_false_v = false;
++#endif // __cplusplus >= 201703L
+ 
+ template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
+     static __device__ T reduce(T val) {
+@@ -1345,7 +1361,9 @@ struct ggml_cuda_concurrent_event {
+         const int64_t       join_start = (int64_t) join_t->data;
+         const int64_t       join_end   = join_start + ggml_nbytes(join_t);
+ 
+-        for (const auto & [tensor, stream] : stream_mapping) {
++        for (const auto & tensor_stream : stream_mapping) { // lumen: no structured bindings in C++14
++            const auto & tensor = tensor_stream.first;
++            const auto & stream = tensor_stream.second;
+             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
+             const int64_t       t_start = (int64_t) t->data;
+             const int64_t       t_end   = t_start + ggml_nbytes(t);
+@@ -1366,7 +1384,9 @@ struct ggml_cuda_concurrent_event {
+ 
+         bool writes_overlap = false;
+         bool dependent_srcs = false;
+-        for (const auto & [tensor, stream] : stream_mapping) {
++        for (const auto & tensor_stream : stream_mapping) { // lumen: no structured bindings in C++14
++            const auto & tensor = tensor_stream.first;
++            const auto & stream = tensor_stream.second;
+             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
+             const int64_t       t_start = (int64_t) t->data;
+             const int64_t       t_end   = t_start + ggml_nbytes(t);
+@@ -1490,7 +1510,9 @@ struct ggml_backend_cuda_context {
+     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
+     // if graphs are in use without having access to the specific graph key)
+     bool any_cuda_graph_enabled() const {
+-        for (const auto & [key, graph] : cuda_graphs) {
++        for (const auto & key_graph : cuda_graphs) { // lumen: no structured bindings in C++14
++            const auto & key = key_graph.first;
++            const auto & graph = key_graph.second;
+             if (graph && graph->is_enabled()) {
+                 return true;
+             }
+@@ -1500,7 +1522,9 @@ struct ggml_backend_cuda_context {
+ 
+     // Check if any CUDA graph has an instance for this context
+     bool any_cuda_graph_has_instance() const {
+-        for (const auto & [key, graph] : cuda_graphs) {
++        for (const auto & key_graph : cuda_graphs) { // lumen: no structured bindings in C++14
++            const auto & key = key_graph.first;
++            const auto & graph = key_graph.second;
+             if (graph && graph->instance != nullptr) {
+                 return true;
+             }
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 7c45d0d..df98a01 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -1410,41 +1410,37 @@ struct batched_mul_mat_traits;
+ template<>
+ struct batched_mul_mat_traits<GGML_TYPE_F32> {
+     using cuda_type = float;
+-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+-    static inline const cudaDataType_t data_type = CUDA_R_32F;
+-    static inline const ggml_type ggml_type_val = GGML_TYPE_F32;
+-    static inline const float alpha = 1.0f;
+-    static inline const float beta = 0.0f;
+-    static inline const void* get_alpha() { static const float val = alpha; return &val; }
+-    static inline const void* get_beta() { static const float val = beta; return &val; }
++    static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
++    static constexpr cudaDataType_t data_type = CUDA_R_32F;
++    static constexpr ggml_type ggml_type_val = GGML_TYPE_F32;
++    static inline const void* get_alpha() { static const float val = 1.0f; return &val; }
++    static inline const void* get_beta() { static const float val = 0.0f; return &val; }
+     static inline auto convert(ggml_type src_type) { return ggml_get_to_fp32_cuda(src_type); }
+     static inline auto convert_nc(ggml_type src_type) { return ggml_get_to_fp32_nc_cuda(src_type); }
+ };
+ 
++#if CUDART_VERSION >= 11000 // lumen: cuBLAS < 11 has no CUDA_R_16BF
+ template<>
+ struct batched_mul_mat_traits<GGML_TYPE_BF16> {
+     using cuda_type = nv_bfloat16;
+-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+-    static inline const cudaDataType_t data_type = CUDA_R_16BF;
+-    static inline const ggml_type ggml_type_val = GGML_TYPE_BF16;
+-    static inline const float alpha = 1.0f;
+-    static inline const float beta = 0.0f;
+-    static inline const void* get_alpha() { static const float val = alpha; return &val; }
+-    static inline const void* get_beta() { static const float val = beta; return &val; }
++    static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
++    static constexpr cudaDataType_t data_type = CUDA_R_16BF;
++    static constexpr ggml_type ggml_type_val = GGML_TYPE_BF16;
++    static inline const void* get_alpha() { static const float val = 1.0f; return &val; }
++    static inline const void* get_beta() { static const float val = 0.0f; return &val; }
+     static inline auto convert(ggml_type src_type) { return ggml_get_to_bf16_cuda(src_type); }
+     static inline auto convert_nc(ggml_type src_type) { return ggml_get_to_bf16_nc_cuda(src_type); }
+ };
++#endif // CUDART_VERSION >= 11000
+ 
+ template<>
+ struct batched_mul_mat_traits<GGML_TYPE_F16> {
+     using cuda_type = half;
+-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_16F;
+-    static inline const cudaDataType_t data_type = CUDA_R_16F;
+-    static inline const ggml_type ggml_type_val = GGML_TYPE_F16;
+-    static inline const half alpha = 1.0;
+-    static inline const half beta = 0.0;
+-    static inline const void* get_alpha() { static const half val = alpha; return &val; }
+-    static inline const void* get_beta() { static const half val = beta; return &val; }
++    static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_16F;
++    static constexpr cudaDataType_t data_type = CUDA_R_16F;
++    static constexpr ggml_type ggml_type_val = GGML_TYPE_F16;
++    static inline const void* get_alpha() { static const half val = __float2half(1.0f); return &val; }
++    static inline const void* get_beta() { static const half val = __float2half(0.0f); return &val; }
+     static inline auto convert(ggml_type src_type) { return ggml_get_to_fp16_cuda(src_type); }
+     static inline auto convert_nc(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
+ };
+@@ -1733,9 +1729,15 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
+         case GGML_TYPE_F32:
+             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
+             break;
++#if CUDART_VERSION >= 11000
+         case GGML_TYPE_BF16:
+             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_BF16>(ctx, src0, src1, dst);
+             break;
++#else
++        case GGML_TYPE_BF16: // lumen: no BF16 cuBLAS before CUDA 11, use F32
++            ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
++            break;
++#endif // CUDART_VERSION >= 11000
+         case GGML_TYPE_F16:
+             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F16>(ctx, src0, src1, dst);
+             break;
+@@ -1831,7 +1833,8 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
+         return false;
+     }
+ 
+-    if (const bool swapped = ggml_get_op_params_i32(glu, 1); swapped) {
++    const bool swapped = ggml_get_op_params_i32(glu, 1); // lumen: no if-with-initializer in C++14
++    if (swapped) {
+         return false;
+     }
+ 
+@@ -4484,7 +4487,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+ 
+             if (stream_ctx.concurrent_events.size() > 0) {
+                 should_launch_concurrent_events = true;
+-                for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
++                for (const auto & tensor_event : stream_ctx.concurrent_events) { // lumen: no structured bindings in C++14
++                    const auto & tensor = tensor_event.first;
++                    const auto & event = tensor_event.second;
+                     should_launch_concurrent_events = should_launch_concurrent_events && event.is_valid();
+                 }
+             }
+@@ -4498,7 +4503,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+                     node_to_idx[cgraph->nodes[i]] = i;
+                 }
+ 
+-                for (auto & [fork_node, event] : stream_ctx.concurrent_events) {
++                for (auto & fork_node_event : stream_ctx.concurrent_events) { // lumen: no structured bindings in C++14
++                    auto & fork_node = fork_node_event.first;
++                    auto & event = fork_node_event.second;
+                     // Find positions of all nodes from this event in the current graph
+                     std::vector<int> positions;
+                     positions.reserve(event.original_order.size());
+@@ -4965,7 +4972,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
+     // store {fork_idx, join_idx}
+     std::vector<std::pair<int, int>> concurrent_node_ranges;
+ 
+-    for (const auto & [root_node, count] : fan_out) {
++    for (const auto & root_node_count : fan_out) { // lumen: no structured bindings in C++14
++        const auto & root_node = root_node_count.first;
++        const auto & count = root_node_count.second;
+         if (count >= min_fan_out && count <= max_fan_out) {
+             const int root_node_idx = node_indices[root_node];
+ 
+@@ -4976,7 +4985,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
+             }
+ 
+             bool is_part_of_event = false;
+-            for (const auto & [start, end] : concurrent_node_ranges) {
++            for (const auto & start_end : concurrent_node_ranges) { // lumen: no structured bindings in C++14
++                const auto & start = start_end.first;
++                const auto & end = start_end.second;
+                 if (root_node_idx >= start && root_node_idx <= end) {
+                     is_part_of_event = true;
+                 }
+diff --git a/ggml/src/ggml-cuda/norm.cu b/ggml/src/ggml-cuda/norm.cu
+index d804b93..301769c 100644
+--- a/ggml/src/ggml-cuda/norm.cu
++++ b/ggml/src/ggml-cuda/norm.cu
+@@ -82,7 +82,8 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
+ }
+ 
+ template <int block_size, bool do_multiply = false, bool do_add = false, bool do_scale = false>
+-static __global__ void rms_norm_f32(const float * x,
++// lumen: launch bounds let ptxas fit the 1024-thread variant into GPUs with 32K registers per block (e.g. sm_62)
++static __global__ void __launch_bounds__(block_size) rms_norm_f32(const float * x,
+                                     float *       dst,
+                                     const int     ncols,
+                                     const int     nchannels,
+diff --git a/ggml/src/ggml-cuda/rope.cu b/ggml/src/ggml-cuda/rope.cu
+index b4fca77..a3ab116 100644
+--- a/ggml/src/ggml-cuda/rope.cu
++++ b/ggml/src/ggml-cuda/rope.cu
+@@ -708,7 +708,8 @@ void ggml_cuda_op_rope_fused(ggml_backend_cuda_context & ctx, ggml_tensor * rope
+ // fused RMS_NORM + MUL + ROPE (+ VIEW + SET_ROWS)
+ // one block per row: block_reduce gives the norm scale, then each thread applies mul and rope to the elements it owns
+ template <int block_size, bool has_ff, typename D>
+-static __global__ void rms_norm_mul_rope_f32(
++// lumen: launch bounds let ptxas fit the 1024-thread variant into GPUs with 32K registers per block (e.g. sm_62)
++static __global__ void __launch_bounds__(block_size) rms_norm_mul_rope_f32(
+         const float * x, D * dst, const int ncols, const int nchannels, const int nsamples,
+         const int64_t s01, const int64_t s02, const int64_t s03,
+         const int64_t s1, const int64_t s2, const int64_t s3,
+diff --git a/ggml/src/ggml-cuda/softmax.cu b/ggml/src/ggml-cuda/softmax.cu
+index f320c6f..04a1d8c 100644
+--- a/ggml/src/ggml-cuda/softmax.cu
++++ b/ggml/src/ggml-cuda/softmax.cu
+@@ -6,12 +6,22 @@
+ #include <hip/hip_cooperative_groups.h>
+ #else
+ #include <cooperative_groups.h>
++#if CUDART_VERSION >= 11000 // lumen: header added in CUDA 11; only this_grid()/sync() are used
+ #include <cooperative_groups/reduce.h>
++#endif
+ #endif // GGML_USE_HIP
+ 
+ #include <cstdint>
+ #include <utility>
+ 
++#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION < 11000
++// lumen: before CUDA 11, grid-wide sync (cg::this_grid().sync()) needs relocatable
++// device code (-rdc) and fails in ptxas with "Unresolved extern function
++// cudaCGGetIntrinsicHandle". Drop the optional cooperative kernel; rows that do not
++// fit in shared memory take the existing non-cooperative fallback.
++#define GGML_CUDA_NO_COOPERATIVE_SOFTMAX
++#endif
++
+ template <typename T>
+ static __device__ __forceinline__ float t2f32(T val) {
+     return (float) val;
+@@ -142,6 +152,7 @@ static __global__ void soft_max_f32(
+     }
+ }
+ 
++#ifndef GGML_CUDA_NO_COOPERATIVE_SOFTMAX
+ // TODO: Template to allow keeping ncols in registers if they fit
+ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __restrict__ x,
+                                                                 float * __restrict__ dst,
+@@ -252,6 +263,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
+ #ifdef __clang__
+ #pragma clang diagnostic pop
+ #endif // __clang__
++#endif // GGML_CUDA_NO_COOPERATIVE_SOFTMAX
+ 
+ static __global__ void soft_max_back_f32(
+         const float * grad, const float * dstf, float * dst, const int ncols, const float scale) {
+@@ -296,7 +308,11 @@ static void launch_soft_max_kernels(const float * x, const T * mask, const float
+     };
+ 
+     // unary fold over launch_kernel
+-    if ((launch_kernel(std::integral_constant<int, Ns>{}) || ...)) {
++    // lumen: C++14 form of the fold (launch_kernel(...) || ...); stops at the first launch.
++    bool launched = false;
++    using expand_t = int[];
++    (void) expand_t{0, (launched = launched || launch_kernel(std::integral_constant<int, Ns>{}), 0)...};
++    if (launched) {
+         return;
+     }
+ 
+@@ -305,6 +321,7 @@ static void launch_soft_max_kernels(const float * x, const T * mask, const float
+     soft_max_f32<true, 0, 0><<<block_nums, block_dims, nbytes_shared, stream>>>(x, mask, sinks, dst, p);
+ }
+ 
++#ifndef GGML_CUDA_NO_COOPERATIVE_SOFTMAX
+ __launch_bounds__(8*WARP_SIZE, 1) static __global__ void soft_max_f32_parallelize_cols(const float * __restrict__ x,
+                                                      float * __restrict__ dst,
+                                                      float * __restrict__ tmp_maxs,
+@@ -323,6 +340,7 @@ __launch_bounds__(8*WARP_SIZE, 1) static __global__ void soft_max_f32_paralleliz
+                                                  tmp_sums, shared_vals[0], shared_vals[1], p);
+     }
+ }
++#endif // GGML_CUDA_NO_COOPERATIVE_SOFTMAX
+ 
+ template <typename T>
+ static void soft_max_f32_cuda(const float *                                x,
+@@ -352,6 +370,7 @@ static void soft_max_f32_cuda(const float *                                x,
+         // Parallelize across SMs for top-p/dist-sampling
+         // The heuristic for parallelizing rows across SMs vs parallelizing single row & looping over all rows was done on the basis of a B6000 GPU and
+         // Can be adapted further for lower-SM-count GPUs, though keeping data in registers should be implemented first as that is the optimal solution.
++#ifndef GGML_CUDA_NO_COOPERATIVE_SOFTMAX
+         if (ggml_cuda_info().devices[id].supports_cooperative_launch &&
+             ncols_x / (params.ne01 * params.ne02 * params.ne03) > 8192 && mask == nullptr && sinks == nullptr &&
+             params.scale == 1.0f && params.max_bias == 0.0f) {
+@@ -363,7 +382,9 @@ static void soft_max_f32_cuda(const float *                                x,
+             CUDA_CHECK(cudaLaunchCooperativeKernel((void *) soft_max_f32_parallelize_cols,
+                                                    dim3(ggml_cuda_info().devices[id].nsm, 1, 1),
+                                                    dim3(WARP_SIZE * 8, 1, 1), kernel_args, 0, stream));
+-        } else {
++        } else
++#endif // GGML_CUDA_NO_COOPERATIVE_SOFTMAX
++        {
+             const size_t nbytes_shared_low = WARP_SIZE * sizeof(float);
+             soft_max_f32<false, 0, 0>
+                 <<<block_nums, block_dims, nbytes_shared_low, stream>>>(x, mask, sinks, dst, params);
+diff --git a/ggml/src/ggml-cuda/vendors/cuda.h b/ggml/src/ggml-cuda/vendors/cuda.h
+index 323c980..24f09de 100644
+--- a/ggml/src/ggml-cuda/vendors/cuda.h
++++ b/ggml/src/ggml-cuda/vendors/cuda.h
+@@ -3,8 +3,13 @@
+ #include <cuda_runtime.h>
+ #include <cuda.h>
+ #include <cublas_v2.h>
++#if CUDART_VERSION >= 11000
+ #include <cuda_bf16.h>
++#else
++#include "cuda_bf16_compat.h" // lumen: CUDA < 11 has no cuda_bf16.h
++#endif
+ #include <cuda_fp16.h>
++#include "cuda_cxx17_compat.h" // lumen: C++17 library shims for nvcc in C++14 mode
+ 
+ #ifdef GGML_USE_NCCL
+ #include <nccl.h>
+@@ -26,3 +31,15 @@
+ #define CUBLAS_COMPUTE_32F CUDA_R_32F
+ #define cublasComputeType_t cudaDataType_t
+ #endif // CUDART_VERSION < 11020
++
++#if CUDART_VERSION < 11000
++// lumen: before CUDA 11 the flags argument of cudaStreamWaitEvent has no default.
++static inline cudaError_t cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event) {
++    return cudaStreamWaitEvent(stream, event, 0);
++}
++#endif // CUDART_VERSION < 11000
++
++#if CUDART_VERSION < 11020 && !defined(__clang__)
++// lumen: __builtin_assume is only an optimization hint; nvcc supports it from 11.2.
++#define __builtin_assume(cond) ((void) 0)
++#endif
+diff --git a/ggml/src/ggml-cuda/vendors/cuda_bf16_compat.h b/ggml/src/ggml-cuda/vendors/cuda_bf16_compat.h
+new file mode 100644
+index 0000000..4995af5
+--- /dev/null
++++ b/ggml/src/ggml-cuda/vendors/cuda_bf16_compat.h
+@@ -0,0 +1,83 @@
++#pragma once
++
++// lumen: CUDA < 11 has no cuda_bf16.h. This header provides the subset of its API
++// that ggml-cuda uses, emulated in software. Storage matches CUDA 11's
++// __nv_bfloat16 (the upper 16 bits of an IEEE-754 float), so tensors stay
++// binary-compatible. GPUs below sm_80 have no bf16 arithmetic units anyway: CUDA 11
++// emulates bf16 math through float on them as well.
++
++#include <cuda_runtime.h>
++#include <cstring>
++
++static __host__ __device__ __forceinline__ unsigned int ggml_bf16_compat_f2u(float f) {
++#ifdef __CUDA_ARCH__
++    return __float_as_uint(f);
++#else
++    unsigned int u;
++    memcpy(&u, &f, sizeof(u));
++    return u;
++#endif
++}
++
++static __host__ __device__ __forceinline__ float ggml_bf16_compat_u2f(unsigned int u) {
++#ifdef __CUDA_ARCH__
++    return __uint_as_float(u);
++#else
++    float f;
++    memcpy(&f, &u, sizeof(f));
++    return f;
++#endif
++}
++
++// Round to nearest even; NaNs stay NaN (quiet bit set).
++static __host__ __device__ __forceinline__ unsigned short ggml_bf16_compat_from_float(float f) {
++    unsigned int u = ggml_bf16_compat_f2u(f);
++    if ((u & 0x7fffffffu) > 0x7f800000u) {
++        return (unsigned short) ((u >> 16) | 0x40u);
++    }
++    u += 0x7fffu + ((u >> 16) & 1u);
++    return (unsigned short) (u >> 16);
++}
++
++struct __align__(2) __nv_bfloat16 {
++    unsigned short x;
++
++    __nv_bfloat16() = default;
++    __host__ __device__ __nv_bfloat16(float f) : x(ggml_bf16_compat_from_float(f)) {}
++    __host__ __device__ operator float() const { return ggml_bf16_compat_u2f((unsigned int) x << 16); }
++};
++
++struct __align__(4) __nv_bfloat162 {
++    __nv_bfloat16 x;
++    __nv_bfloat16 y;
++
++    __nv_bfloat162() = default;
++    __host__ __device__ __nv_bfloat162(__nv_bfloat16 a, __nv_bfloat16 b) : x(a), y(b) {}
++};
++
++typedef __nv_bfloat16  nv_bfloat16;
++typedef __nv_bfloat162 nv_bfloat162;
++
++static __host__ __device__ __forceinline__ __nv_bfloat16 __float2bfloat16(float f) { return __nv_bfloat16(f); }
++static __host__ __device__ __forceinline__ __nv_bfloat16 __float2bfloat16_rn(float f) { return __nv_bfloat16(f); }
++static __host__ __device__ __forceinline__ float __bfloat162float(__nv_bfloat16 h) { return float(h); }
++
++static __host__ __device__ __forceinline__ __nv_bfloat162 __floats2bfloat162_rn(float a, float b) {
++    return __nv_bfloat162(__nv_bfloat16(a), __nv_bfloat16(b));
++}
++static __host__ __device__ __forceinline__ __nv_bfloat162 __float22bfloat162_rn(float2 f) {
++    return __floats2bfloat162_rn(f.x, f.y);
++}
++static __host__ __device__ __forceinline__ __nv_bfloat162 __bfloat162bfloat162(__nv_bfloat16 h) {
++    return __nv_bfloat162(h, h);
++}
++static __host__ __device__ __forceinline__ __nv_bfloat162 make_bfloat162(__nv_bfloat16 a, __nv_bfloat16 b) {
++    return __nv_bfloat162(a, b);
++}
++static __host__ __device__ __forceinline__ float2 __bfloat1622float2(__nv_bfloat162 h) {
++    return make_float2(float(h.x), float(h.y));
++}
++static __host__ __device__ __forceinline__ __nv_bfloat16 __low2bfloat16(__nv_bfloat162 h)  { return h.x; }
++static __host__ __device__ __forceinline__ __nv_bfloat16 __high2bfloat16(__nv_bfloat162 h) { return h.y; }
++static __host__ __device__ __forceinline__ float __low2float(__nv_bfloat162 h)  { return float(h.x); }
++static __host__ __device__ __forceinline__ float __high2float(__nv_bfloat162 h) { return float(h.y); }
+diff --git a/ggml/src/ggml-cuda/vendors/cuda_cxx17_compat.h b/ggml/src/ggml-cuda/vendors/cuda_cxx17_compat.h
+new file mode 100644
+index 0000000..ec6105c
+--- /dev/null
++++ b/ggml/src/ggml-cuda/vendors/cuda_cxx17_compat.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++// lumen: nvcc < 11 has no -std=c++17, so ggml-cuda is compiled as C++14 there.
++// This header provides the C++17 library pieces that ggml-cuda uses and that
++// can be expressed in C++14. Language features (fold expressions, inline
++// variables, structured bindings) are handled at their use sites.
++
++#include <type_traits>
++
++#if __cplusplus < 201703L
++namespace std {
++template <class T, class U>
++constexpr bool is_same_v = is_same<T, U>::value;
++} // namespace std
++#endif

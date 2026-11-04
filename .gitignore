@@ -1,0 +1,12 @@
+# lumen: never versioned
+models/
+bench/images/
+third_party/llama.cpp/
+bench/data/
+# raw benchmark logs and quality answers stay on the board (results are summarized in bench/results.md)
+bench/runs/
+bench/quality/
+bench/*.log
+bench/*.done
+__pycache__/
+*.pyc

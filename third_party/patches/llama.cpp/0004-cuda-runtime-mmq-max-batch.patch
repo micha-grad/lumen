@@ -1,0 +1,24 @@
+diff --git a/ggml/src/ggml-cuda/mmq.cu b/ggml/src/ggml-cuda/mmq.cu
+index 46efdfe..c62275f 100644
+--- a/ggml/src/ggml-cuda/mmq.cu
++++ b/ggml/src/ggml-cuda/mmq.cu
+@@ -396,6 +396,19 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
+         return false;
+     }
+ 
++    // lumen: optional runtime cap on the batch size that uses MMQ for dense matmuls.
++    // Larger batches go to cuBLAS (dequantize + GEMM). On GPUs without tensor cores
++    // (e.g. sm_62) MMQ has no fixed cost but scales poorly with the batch size, while
++    // cuBLAS has a fixed dequantization cost per matmul and scales well, so the best
++    // choice depends on the batch size. Unset: upstream behaviour.
++    static const int64_t mmq_max_batch = []() {
++        const char * env = getenv("GGML_CUDA_MMQ_MAX_BATCH");
++        return env != nullptr ? (int64_t) atoll(env) : (int64_t) -1;
++    }();
++    if (mmq_max_batch >= 0 && n_experts == 0 && ne11 > mmq_max_batch) {
++        return false;
++    }
++
+     // MMQ tiles require at least 48 KiB per-block shared memory; fall back to BLAS otherwise.
+     {
+         const int    id    = ggml_cuda_get_device();

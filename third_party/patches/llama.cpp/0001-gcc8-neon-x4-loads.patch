@@ -1,0 +1,33 @@
+diff --git a/ggml/src/ggml-cpu/ggml-cpu-impl.h b/ggml/src/ggml-cpu/ggml-cpu-impl.h
+index 82345b2..8fbf952 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu-impl.h
++++ b/ggml/src/ggml-cpu/ggml-cpu-impl.h
+@@ -304,6 +304,28 @@ inline static uint8x16_t ggml_vqtbl1q_u8(uint8x16_t a, uint8x16_t b) {
+ 
+ #endif // !defined(__aarch64__)
+ 
++// lumen: GCC < 9 on aarch64 does not provide the four-register NEON loads
++// (vld1q_u8_x4 / vld1q_s8_x4). Provide equivalents built from single loads.
++#if defined(__aarch64__) && defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 9
++inline static uint8x16x4_t vld1q_u8_x4(const uint8_t * ptr) {
++    uint8x16x4_t res;
++    res.val[0] = vld1q_u8(ptr + 0);
++    res.val[1] = vld1q_u8(ptr + 16);
++    res.val[2] = vld1q_u8(ptr + 32);
++    res.val[3] = vld1q_u8(ptr + 48);
++    return res;
++}
++
++inline static int8x16x4_t vld1q_s8_x4(const int8_t * ptr) {
++    int8x16x4_t res;
++    res.val[0] = vld1q_s8(ptr + 0);
++    res.val[1] = vld1q_s8(ptr + 16);
++    res.val[2] = vld1q_s8(ptr + 32);
++    res.val[3] = vld1q_s8(ptr + 48);
++    return res;
++}
++#endif
++
+ #if !defined(__ARM_FEATURE_DOTPROD)
+ 
+ // NOTE: this fallback produces the same total sum as native vdotq_s32 but with different per-lane grouping — do not use when individual lane values matter.
