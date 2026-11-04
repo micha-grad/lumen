@@ -113,7 +113,6 @@ quality series there lives in `bench/kl-divergence/`.
 - [x] Kernel selection, weight format and image-token trade-offs
 - [ ] Camera capture + question/answer application (`src/`)
 - [ ] Vision encoder speed-up (GPU `IM2COL`, then possibly TensorRT)
-- [ ] Port to a Jetson Orin (nothing board-specific is hardcoded)
 
 ## Credits
 

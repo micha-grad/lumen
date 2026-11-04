@@ -144,9 +144,9 @@ Each value is only an environment variable on the same binary:
 - MMQ and cuBLAS cross over at about 30 tokens (pp32: 19.2 vs 19.9 t/s). With 32, every
   size is within ~3% of the better path.
 - The setting is per process. Any lumen command that runs inference must export
-  `GGML_CUDA_MMQ_MAX_BATCH=32`. The value is board-specific: the Orin has tensor
-  cores and takes a different upstream path, so the value must come from a parameter,
-  not be hardcoded.
+  `GGML_CUDA_MMQ_MAX_BATCH=32`. The value is GPU-specific: GPUs with tensor cores
+  take a different upstream path, so the value must come from a parameter, not be
+  hardcoded.
 
 ### O3: breakdown of the VQA prefill (2026-10-18), no code change
 

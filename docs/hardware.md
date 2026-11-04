@@ -324,7 +324,7 @@ in the Decisions section.
    llama.cpp: the toolkit is old, and building against it is the main risk in
    phase 1. The fallback path in CLAUDE.md (CPU build first, then patch ggml-cuda)
    applies. The arch must come from discovery (`deviceQuery`), not be hardcoded, so
-   that the Orin board works later.
+   that the build stays portable to other NVIDIA GPUs.
 3. **Host compiler = gcc 7.5, glibc 2.27, and no system CMake.** **[decided]**
    User-local CMake 3.31.6 and gcc-8/g++-8 8.4.0 are both installed. nvcc 10.2
    accepts both g++ 7.5 and g++-8 as host compiler (`-ccbin`).
